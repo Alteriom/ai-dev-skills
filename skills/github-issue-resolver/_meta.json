@@ -1,0 +1,7 @@
+{
+  "name": "github-issue-resolver",
+  "version": "1.0.0",
+  "description": "Test-driven issue resolution with root cause analysis",
+  "author": "Alteriom",
+  "tags": ["github", "issues", "tdd", "debugging"]
+}

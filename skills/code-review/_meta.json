@@ -1,0 +1,7 @@
+{
+  "name": "code-review",
+  "version": "1.0.0",
+  "description": "Systematic code review checklist with constructive feedback patterns",
+  "author": "Alteriom",
+  "tags": ["code-review", "quality", "feedback", "pr"]
+}

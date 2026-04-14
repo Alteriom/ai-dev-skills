@@ -1,0 +1,13 @@
+{
+  "name": "github-ops",
+  "version": "1.0.0",
+  "description": "Automate GitHub workflows using the official gh CLI tool",
+  "author": "Alteriom",
+  "license": "MIT",
+  "tags": ["github", "gh-cli", "pr", "issues", "ci-cd"],
+  "keywords": ["github", "gh", "pull-request", "issues", "cli"],
+  "category": "development",
+  "dependencies": [],
+  "relatedSkills": ["code-review", "task-development-workflow"],
+  "minimumAgentVersion": "1.0.0"
+}

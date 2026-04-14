@@ -1,0 +1,7 @@
+{
+  "name": "architecture-patterns",
+  "version": "1.0.0",
+  "description": "Common software architecture patterns (Layered, Hexagonal, CQRS, Event Sourcing)",
+  "author": "Alteriom",
+  "tags": ["architecture", "patterns", "microservices", "cqrs", "hexagonal"]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "prd-writer",
+  "version": "1.0.0",
+  "description": "Product requirements using Shape Up and Amazon PR/FAQ patterns",
+  "author": "Alteriom",
+  "tags": ["prd", "product", "requirements", "shape-up"]
+}

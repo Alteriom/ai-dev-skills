@@ -1,0 +1,7 @@
+{
+  "name": "feature-specification",
+  "version": "1.0.0",
+  "description": "BDD-style feature breakdown with acceptance criteria",
+  "author": "Alteriom",
+  "tags": ["bdd", "specification", "acceptance-criteria", "gherkin"]
+}

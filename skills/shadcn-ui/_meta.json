@@ -1,0 +1,7 @@
+{
+  "name": "shadcn-ui",
+  "slug": "shadcn-ui",
+  "description": "Build modern UIs with shadcn/ui components and Tailwind CSS patterns, leveraging Radix UI primitives for accessible, production-grade React design systems.",
+  "tags": ["shadcn", "shadcn-ui", "tailwindcss", "Radix", "react", "design-systems"],
+  "version": "1.0.0"
+}

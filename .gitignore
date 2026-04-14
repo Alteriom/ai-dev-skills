@@ -1,0 +1,47 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node modules (if any)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python (if any)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Logs
+*.log
+logs/
+
+# Temp files
+*.tmp
+.cache/
+.temp/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE/workspace
+.nova/
+.cursor/
+
+# Validation reports (keep local only)
+validation-reports/
+*.validation.log

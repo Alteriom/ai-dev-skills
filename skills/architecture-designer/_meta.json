@@ -1,0 +1,7 @@
+{
+  "name": "architecture-designer",
+  "version": "1.0.0",
+  "description": "System design patterns with C4 model, ADRs, and NFRs",
+  "author": "Alteriom",
+  "tags": ["architecture", "design", "c4-model", "adr", "nfr"]
+}

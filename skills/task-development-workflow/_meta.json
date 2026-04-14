@@ -1,0 +1,10 @@
+{
+  "name": "task-development-workflow",
+  "version": "1.0.0",
+  "description": "Complete TDD workflow from task to deployment with CI/CD and rollback",
+  "author": "Alteriom",
+  "tags": ["tdd", "workflow", "ci-cd", "deployment", "git", "testing"],
+  "requires": {
+    "bins": ["git", "gh"]
+  }
+}

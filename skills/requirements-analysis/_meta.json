@@ -1,0 +1,7 @@
+{
+  "name": "requirements-analysis",
+  "version": "1.0.0",
+  "description": "Gather, analyze, and validate software requirements using IEEE 830 and BABOK",
+  "author": "Alteriom",
+  "tags": ["requirements", "analysis", "ieee-830", "babok", "moscow", "user-stories"]
+}

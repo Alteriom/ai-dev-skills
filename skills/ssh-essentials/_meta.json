@@ -1,0 +1,10 @@
+{
+  "name": "ssh-essentials",
+  "version": "1.0.0",
+  "description": "Secure server management with SSH keys, hardening, and jump hosts",
+  "author": "Alteriom",
+  "tags": ["ssh", "security", "server-management", "bastion", "openssh"],
+  "requires": {
+    "bins": ["ssh", "ssh-keygen", "scp"]
+  }
+}

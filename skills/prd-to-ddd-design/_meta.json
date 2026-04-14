@@ -1,0 +1,7 @@
+{
+  "name": "prd-to-ddd-design",
+  "version": "1.0.0",
+  "description": "Domain-Driven Design decomposition with Event Storming",
+  "author": "Alteriom",
+  "tags": ["ddd", "domain-driven-design", "event-storming", "bounded-context"]
+}

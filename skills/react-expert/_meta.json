@@ -1,0 +1,33 @@
+{
+  "name": "React Expert",
+  "slug": "react-expert",
+  "version": "1.0.0",
+  "description": "Build production-ready React 19+ applications with hooks, Server Components, performance optimization, and modern state management patterns",
+  "author": "Alteriom AI Dev Skills",
+  "created": "2026-04-13",
+  "updated": "2026-04-13",
+  "tags": ["react", "react-19", "hooks", "server-components", "state-management", "performance", "frontend"],
+  "dependencies": ["typescript"],
+  "relatedSkills": ["nextjs", "typescript", "zod", "shadcn-ui", "trpc-best-practices", "prisma"],
+  "license": "MIT",
+  "platforms": ["linux", "macos", "windows"],
+  "skillLevel": "intermediate",
+  "estimatedReadTime": "30 minutes",
+  "karpathyPrinciples": [
+    "Think Before Coding",
+    "Simplicity First",
+    "Goal-Driven Execution",
+    "Surgical Changes"
+  ],
+  "sections": [
+    "When to Use",
+    "Prerequisites",
+    "Core Workflows",
+    "Common Patterns",
+    "Common Pitfalls",
+    "Verification Checklist",
+    "Integration with Other Skills",
+    "References",
+    "Meta: Skill Quality"
+  ]
+}

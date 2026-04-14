@@ -1,0 +1,7 @@
+{
+  "name": "trpc-best-practices",
+  "version": "1.0.0",
+  "author": "Alteriom",
+  "license": "MIT",
+  "platforms": ["openclaw", "claude-code"]
+}

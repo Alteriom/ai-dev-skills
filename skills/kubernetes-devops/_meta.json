@@ -1,0 +1,7 @@
+{
+  "name": "kubernetes-devops",
+  "version": "1.0.0",
+  "description": "Kubernetes deployments with security and best practices",
+  "author": "Alteriom",
+  "tags": ["kubernetes", "k8s", "devops", "deployment", "security"]
+}
