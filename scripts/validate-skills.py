@@ -20,6 +20,14 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    description: null            (and `description: # comment`)
     dropped    metadata: [unterminated      (structural YAML error)
     dropped    no description key at all
+    dropped    description: foo:          (colon with no space after it)
+    accepted   an indented, nested `short-description: Text: details`
+    accepted   description: 123 # TODO: x  -- decodes to the number 123
+
+The last line is the one place this script is deliberately stricter than the
+loader: a numeric or otherwise non-string required field loads (rendered as
+"123"), but it is certainly a mistake, so it is reported rather than passed.
+Everything else here fails only what the loader actually drops.
 
 A plain scalar containing ": " is invalid per the YAML spec and PyYAML rejects
 it, but the loaders accept it -- two skills in production rely on that today
@@ -50,8 +58,17 @@ except ImportError:
 REQUIRED = ("name", "description")
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 
-# A top-level `key: value` line whose value is on the same line.
-KEY_VALUE = re.compile(r"^([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
+# A `key: value` line whose value is on the same line, at any indent. Nested
+# values matter: the loaders accept an indented `short-description: Text: details`,
+# so a top-level-only rewrite would leave the retry failing on a file that loads.
+KEY_VALUE = re.compile(r"^([ \t]*)([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
+
+# `key: |` / `key: >` opens a block scalar; every more-indented line below it is
+# literal text, not a mapping, and must never be rewritten.
+BLOCK_SCALAR = re.compile(r"^([ \t]*)[A-Za-z0-9_.-]+:[ \t]*[|>]")
+
+# "#" only opens a comment when it follows whitespace -- `foo#bar` is one scalar.
+INLINE_COMMENT = re.compile(r"(?:^|\s)#")
 
 # Values opening a quote, flow collection, block scalar, anchor, alias or tag
 # are real YAML syntax. Re-quoting those would paper over a structural error the
@@ -66,23 +83,55 @@ YAML_INDICATORS = ("\"", "'", "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", 
 # PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
 # value would destroy the type PyYAML correctly assigned it, and `description:
 # null` would come back as the string "null" and wrongly pass.
-COLON_IN_VALUE = re.compile(r":(\s|$)")
+# Colon *followed by whitespace* -- that is the construct the loaders tolerate.
+# A value merely ending in a colon (`description: foo:`) is not it: the loader
+# drops that skill, so it must stay a parse failure rather than be quoted into a
+# passing string.
+COLON_IN_VALUE = re.compile(r":\s")
+
+
+def _strip_inline_comment(value):
+    """Return the value as the loader decodes it, without any trailing comment."""
+    match = INLINE_COMMENT.search(value)
+    return value[: match.start()].rstrip() if match else value
 
 
 def _quote_colon_bearing_scalars(block):
     """Return the block with colon-bearing plain scalar values quoted."""
     out = []
+    block_scalar_indent = None
+
     for line in block.splitlines():
-        match = KEY_VALUE.match(line)
-        value = match.group(2).rstrip() if match else ""
-        if (
-            match
-            and not value.startswith(YAML_INDICATORS)
-            and COLON_IN_VALUE.search(value)
-        ):
-            out.append(f"{match.group(1)}: {json.dumps(value)}")
-        else:
+        if block_scalar_indent is not None:
+            indent = len(line) - len(line.lstrip())
+            if line.strip() and indent <= block_scalar_indent:
+                block_scalar_indent = None
+            else:
+                out.append(line)
+                continue
+
+        opener = BLOCK_SCALAR.match(line)
+        if opener:
+            block_scalar_indent = len(opener.group(1))
             out.append(line)
+            continue
+
+        match = KEY_VALUE.match(line)
+        if match:
+            indent, key, raw = match.group(1), match.group(2), match.group(3).rstrip()
+            # Compare and quote the decoded value, not the raw line: an inline
+            # comment is not part of the value, and treating it as part of one
+            # would let `description: 123 # TODO: details` masquerade as a string.
+            value = _strip_inline_comment(raw)
+            if (
+                not raw.startswith(YAML_INDICATORS)
+                and value
+                and COLON_IN_VALUE.search(value)
+            ):
+                out.append(f"{indent}{key}: {json.dumps(value)}")
+                continue
+
+        out.append(line)
     return "\n".join(out)
 
 
