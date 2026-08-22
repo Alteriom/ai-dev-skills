@@ -50,6 +50,9 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    metadata: - item: detail     (same value, unread top-level key)
     dropped    metadata: ? item: detail  /  metadata: : item: detail
     dropped    metadata: -ish thing: detail  (a leading `-` is enough)
+    dropped    metadata: ,item Text: detail  (flow-entry indicator, same rule)
+    accepted   description: [DEPRECATED #1] Use when: x  (decodes to "[DEPRECATED")
+    dropped    a nested quoted key with an escaped quote, `"some \" : key":`
     accepted   metadata: / `  thing: - item: detail`   (nested, so fine)
     accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
@@ -160,6 +163,9 @@ UNREAD_KEY_EXCLUDED = (
     # `description` the same values load, and nested under an unread key they
     # load again, so both of those paths still reach the rewrite.
     "-", "?", ":",
+    # `,` is a flow-entry indicator and behaves the same way:
+    #     metadata: ,item Text: detail    DROPPED
+    ",",
 )
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
@@ -256,10 +262,26 @@ def _quote_colon_bearing_scalars(block):
                 excluded += UNREAD_KEY_EXCLUDED
 
             value = _strip_inline_comment(raw)
+            # A colon is the usual reason a line needs quoting, but not the
+            # only one. On a required key an indicator-leading value is legal
+            # text to the loader while PyYAML still refuses it, and stripping
+            # an inline comment can leave the colon behind while leaving the
+            # indicator:
+            #
+            #     description: [DEPRECATED #1] Use when: reviewing
+            #
+            # decodes to "[DEPRECATED" -- the loader strips the comment too,
+            # and loads. Testing only for a colon left that line unrewritten
+            # and failed a skill that loads. On unread keys these indicators
+            # are in `excluded` already, so this clause only widens required
+            # ones.
+            needs_rewrite = bool(COLON_IN_VALUE.search(value)) or value.startswith(
+                UNREAD_KEY_EXCLUDED
+            )
             if (
                 not raw.startswith(excluded)
                 and value
-                and COLON_IN_VALUE.search(value)
+                and needs_rewrite
             ):
                 out.append(f"{indent}{key}: {json.dumps(value)}")
                 continue
