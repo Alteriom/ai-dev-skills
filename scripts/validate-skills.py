@@ -30,6 +30,13 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    a repeated key, required or not (`metadata:` twice)
     dropped    a colon scalar inside a flow collection, `[thing: Text: details]`
     dropped    a plain scalar continued onto a more-indented line with a colon
+    accepted   description: [DEPRECATED] Use when: x   (read as literal text)
+    accepted   description: [thing: Text: details]      (likewise)
+    accepted   description: &summary Text: details      (anchor NOT resolved)
+    accepted   a plain key containing `#`, `foo#bar: Text: details`
+    dropped    description: "unterminated                (a quote really parses)
+    dropped    metadata: [thing: Text: details]          (same value, unread key)
+    dropped    metadata: &summary Text: details          (likewise)
     accepted   description: - item: detail   (read as the string "- item: detail")
     accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
@@ -90,7 +97,7 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 # one false positive for another.
 KEY_VALUE = re.compile(
     r"^([ \t]*(?:-[ \t]+)*)"          # indent, and any sequence markers
-    r"(\"[^\"]*\"|'[^']*'|[^\s:#][^:#]*?)"  # key: quoted, or plain
+    r"(\"[^\"]*\"|'[^']*'|[^\s:#][^:]*?)"  # key: quoted, or plain
     r"[ \t]*:[ \t]+(\S.*)$"          # optional space, separator, value
 )
 
@@ -111,7 +118,18 @@ INLINE_COMMENT = re.compile(r"(?:^|\s)#")
 # field decodes to null. Its comment text can itself contain a colon
 # (`description: # TODO: fill in`), which would otherwise satisfy the rewrite
 # predicate below and launder a null field into a passing string.
-YAML_INDICATORS = ("\"", "'", "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`", "#")
+# Excluded on every key. A quote opens a scalar the loader really does parse --
+# `description: "unterminated` is dropped -- and `#` opens a comment, so the
+# field decodes to null and is dropped too.
+ALWAYS_EXCLUDED = ("\"", "'", "#")
+
+# Excluded only on keys the loader does not read. On `name`/`description` it
+# takes the raw line as text, so `[DEPRECATED] Use when: x`, `[thing: Text:
+# details]` and `&summary Text: details` all load and must be rewritten. The
+# same values on an unknown key drop the whole file, so there they stay
+# excluded and the parse failure stands. Measured, not assumed: the key is what
+# discriminates, not the shape of the value.
+UNREAD_KEY_EXCLUDED = ("[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`")
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
 # PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
@@ -163,9 +181,20 @@ def _quote_colon_bearing_scalars(block):
             # Compare and quote the decoded value, not the raw line: an inline
             # comment is not part of the value, and treating it as part of one
             # would let `description: 123 # TODO: details` masquerade as a string.
+            # `#` is only a comment after whitespace, so `foo#bar` is a real
+            # key -- but `some key # note` is not one, it is a key plus a
+            # comment, and rewriting the line would swallow the comment.
+            if INLINE_COMMENT.search(key):
+                out.append(line)
+                continue
+
+            excluded = ALWAYS_EXCLUDED
+            if key.strip("\"'") not in REQUIRED:
+                excluded += UNREAD_KEY_EXCLUDED
+
             value = _strip_inline_comment(raw)
             if (
-                not raw.startswith(YAML_INDICATORS)
+                not raw.startswith(excluded)
                 and value
                 and COLON_IN_VALUE.search(value)
             ):
