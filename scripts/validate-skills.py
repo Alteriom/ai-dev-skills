@@ -47,6 +47,10 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    metadata: [thing: Text: details]          (same value, unread key)
     dropped    metadata: &summary Text: details          (likewise)
     accepted   description: - item: detail   (read as the string "- item: detail")
+    dropped    metadata: - item: detail     (same value, unread top-level key)
+    dropped    metadata: ? item: detail  /  metadata: : item: detail
+    dropped    metadata: -ish thing: detail  (a leading `-` is enough)
+    accepted   metadata: / `  thing: - item: detail`   (nested, so fine)
     accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
                loader rejects the file)
@@ -143,7 +147,20 @@ ALWAYS_EXCLUDED = ("\"", "'", "#")
 # file. Nested deeper, they are fine again -- `metadata:` / `  thing: [thing:
 # Text: details]` loads. Measured, not assumed: what discriminates is the key
 # and its depth, never the shape of the value.
-UNREAD_KEY_EXCLUDED = ("[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`")
+UNREAD_KEY_EXCLUDED = (
+    "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`",
+    # `-`, `?` and `:` belong here too. Measured on an unread top-level key,
+    # every one of these is dropped:
+    #     metadata: - item: detail
+    #     metadata: ? item: detail
+    #     metadata: : item: detail
+    #     metadata: -ish thing: detail     <- not even a structural form
+    # The last one is why this is a plain prefix test and not `^[-?:](\s|$)`:
+    # the loader drops a leading `-` whether or not a space follows it. On
+    # `description` the same values load, and nested under an unread key they
+    # load again, so both of those paths still reach the rewrite.
+    "-", "?", ":",
+)
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
 # PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
