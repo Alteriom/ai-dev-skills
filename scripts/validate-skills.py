@@ -34,6 +34,10 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     accepted   description: [thing: Text: details]      (likewise)
     accepted   description: &summary Text: details      (anchor NOT resolved)
     accepted   a plain key containing `#`, `foo#bar: Text: details`
+    accepted   a quoted key containing one, `"some # key": Text: details`
+    accepted   a root mapping indented as a whole
+    dropped    a plain key containing a colon, `foo:bar:` / `http://x:`
+    dropped    an indented root whose unread key carries a bad flow value
     dropped    description: "unterminated                (a quote really parses)
     accepted   metadata: / `  thing: [thing: Text: details]`  (nested, so fine)
     accepted   description: {thing: details}             (rendered verbatim)
@@ -156,8 +160,25 @@ def _strip_inline_comment(value):
     return value[: match.start()].rstrip() if match else value
 
 
+def _root_indent(block):
+    """Indentation of the root mapping, which is not always column zero.
+
+    YAML lets the whole root mapping sit at a consistent indent. Equating
+    "top level" with column zero would then classify every entry as nested,
+    and a `metadata: [thing: Text: details]` the loader drops would be rewritten
+    into a pass.
+    """
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        return line[: len(line) - len(line.lstrip())]
+    return ""
+
+
 def _quote_colon_bearing_scalars(block):
     """Return the block with colon-bearing plain scalar values quoted."""
+    root_indent = _root_indent(block)
     out = []
     # Lines indented deeper than this belong to a scalar started above -- a
     # block scalar body, or the continuation of a multi-line plain scalar.
@@ -192,12 +213,15 @@ def _quote_colon_bearing_scalars(block):
             # `#` is only a comment after whitespace, so `foo#bar` is a real
             # key -- but `some key # note` is not one, it is a key plus a
             # comment, and rewriting the line would swallow the comment.
-            if INLINE_COMMENT.search(key):
+            # Inside quotes none of that applies: `"some # key"` is ordinary
+            # key text, and the loader accepts it.
+            quoted_key = key.startswith(('"', "'"))
+            if not quoted_key and INLINE_COMMENT.search(key):
                 out.append(line)
                 continue
 
             excluded = ALWAYS_EXCLUDED
-            if not indent and key.strip("\"'") not in REQUIRED:
+            if indent == root_indent and key.strip("\"'") not in REQUIRED:
                 excluded += UNREAD_KEY_EXCLUDED
 
             value = _strip_inline_comment(raw)
