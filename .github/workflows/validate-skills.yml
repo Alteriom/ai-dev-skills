@@ -1,0 +1,24 @@
+name: Validate skills
+
+# A SKILL.md with broken frontmatter is dropped by the Claude/Codex skill
+# loader at session start. The runner logs it; the agent never sees it, so the
+# skill just silently stops existing (alteriom-dev-ops#2201). This job is the
+# only place that failure is visible before it reaches production.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-skills:
+    name: SKILL.md frontmatter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate every SKILL.md
+        run: python3 scripts/validate-skills.py
