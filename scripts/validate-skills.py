@@ -35,6 +35,9 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     accepted   description: &summary Text: details      (anchor NOT resolved)
     accepted   a plain key containing `#`, `foo#bar: Text: details`
     dropped    description: "unterminated                (a quote really parses)
+    accepted   metadata: / `  thing: [thing: Text: details]`  (nested, so fine)
+    accepted   description: {thing: details}             (rendered verbatim)
+    dropped    description: [alpha, beta]                (a flow SEQUENCE is not)
     dropped    metadata: [thing: Text: details]          (same value, unread key)
     dropped    metadata: &summary Text: details          (likewise)
     accepted   description: - item: detail   (read as the string "- item: detail")
@@ -44,10 +47,14 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    `name`/`description` supplied only via `<<: *defaults`
     accepted   description: 123 # TODO: x  -- decodes to the number 123
 
-The last line is the one place this script is deliberately stricter than the
-loader: a numeric or otherwise non-string required field loads (rendered as
-"123"), but it is certainly a mistake, so it is reported rather than passed.
-Everything else here fails only what the loader actually drops.
+Required fields must decode to a non-empty string, and that is the one place
+this script is deliberately stricter than the loader. `description: 123` and
+`description: {thing: details}` both load, rendered verbatim; `description:
+[alpha, beta]` and `description: null` are dropped. Rather than encode that
+split -- which is arbitrary, undocumented by the loader, and free to change
+between builds -- all four are reported. A required field that is not a string
+is an authoring mistake whichever way the loader happens to treat it. Every
+other rule here fails only what the loader actually drops.
 
 A plain scalar containing ": " is invalid per the YAML spec and PyYAML rejects
 it, but the loaders accept it -- two skills in production rely on that today
@@ -123,12 +130,13 @@ INLINE_COMMENT = re.compile(r"(?:^|\s)#")
 # field decodes to null and is dropped too.
 ALWAYS_EXCLUDED = ("\"", "'", "#")
 
-# Excluded only on keys the loader does not read. On `name`/`description` it
-# takes the raw line as text, so `[DEPRECATED] Use when: x`, `[thing: Text:
-# details]` and `&summary Text: details` all load and must be rewritten. The
-# same values on an unknown key drop the whole file, so there they stay
-# excluded and the parse failure stands. Measured, not assumed: the key is what
-# discriminates, not the shape of the value.
+# Excluded only on TOP-LEVEL keys the loader does not read. On `name`/
+# `description` it takes the raw line as text, so `[DEPRECATED] Use when: x`,
+# `[thing: Text: details]` and `&summary Text: details` all load and must be
+# rewritten. The same values directly on a top-level unknown key drop the whole
+# file. Nested deeper, they are fine again -- `metadata:` / `  thing: [thing:
+# Text: details]` loads. Measured, not assumed: what discriminates is the key
+# and its depth, never the shape of the value.
 UNREAD_KEY_EXCLUDED = ("[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`")
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
@@ -189,7 +197,7 @@ def _quote_colon_bearing_scalars(block):
                 continue
 
             excluded = ALWAYS_EXCLUDED
-            if key.strip("\"'") not in REQUIRED:
+            if not indent and key.strip("\"'") not in REQUIRED:
                 excluded += UNREAD_KEY_EXCLUDED
 
             value = _strip_inline_comment(raw)
