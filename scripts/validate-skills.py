@@ -56,7 +56,11 @@ KEY_VALUE = re.compile(r"^([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
 # Values opening a quote, flow collection, block scalar, anchor, alias or tag
 # are real YAML syntax. Re-quoting those would paper over a structural error the
 # loaders reject, so they are left exactly as written.
-YAML_INDICATORS = ("\"", "'", "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`")
+# "#" is in this list because a value starting with it is a YAML comment, so the
+# field decodes to null. Its comment text can itself contain a colon
+# (`description: # TODO: fill in`), which would otherwise satisfy the rewrite
+# predicate below and launder a null field into a passing string.
+YAML_INDICATORS = ("\"", "'", "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`", "#")
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
 # PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
