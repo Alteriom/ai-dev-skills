@@ -22,6 +22,10 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    no description key at all
     dropped    description: foo:          (colon with no space after it)
     accepted   an indented, nested `short-description: Text: details`
+    accepted   the same scalar under a sequence marker, `- thing: Text: details`
+    dropped    a repeated `description:` key (PyYAML keeps the last; the
+               loader rejects the file)
+    dropped    `name`/`description` supplied only via `<<: *defaults`
     accepted   description: 123 # TODO: x  -- decodes to the number 123
 
 The last line is the one place this script is deliberately stricter than the
@@ -61,11 +65,13 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 # A `key: value` line whose value is on the same line, at any indent. Nested
 # values matter: the loaders accept an indented `short-description: Text: details`,
 # so a top-level-only rewrite would leave the retry failing on a file that loads.
-KEY_VALUE = re.compile(r"^([ \t]*)([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
+# The `-` alternative covers a mapping entry under a sequence marker
+# (`  - thing: Text: details`), which the loaders also accept.
+KEY_VALUE = re.compile(r"^([ \t]*(?:-[ \t]+)*)([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
 
 # `key: |` / `key: >` opens a block scalar; every more-indented line below it is
 # literal text, not a mapping, and must never be rewritten.
-BLOCK_SCALAR = re.compile(r"^([ \t]*)[A-Za-z0-9_.-]+:[ \t]*[|>]")
+BLOCK_SCALAR = re.compile(r"^([ \t]*(?:-[ \t]+)*)[A-Za-z0-9_.-]+:[ \t]*[|>]")
 
 # "#" only opens a comment when it follows whitespace -- `foo#bar` is one scalar.
 INLINE_COMMENT = re.compile(r"(?:^|\s)#")
@@ -135,10 +141,26 @@ def _quote_colon_bearing_scalars(block):
     return "\n".join(out)
 
 
+def _literal_top_level_keys(text):
+    """Keys written directly in the mapping, before merge-key expansion.
+
+    `yaml.safe_load` hides two things the loader cares about. It resolves
+    `<<: *defaults`, so a skill whose `name` exists only in an anchor looks
+    complete when the loader will not advertise it; and it silently keeps the
+    last of a repeated key, so a botched merge conflict that leaves two
+    `description:` lines reads as valid when the loader rejects the file. The
+    node tree still has both, so read the keys from there.
+    """
+    node = yaml.compose(text)
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    return [k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode)]
+
+
 def parse_frontmatter(lines):
-    """Return (mapping, error). Exactly one of the two is None."""
+    """Return (mapping, literal_keys, error). `error` is None on success."""
     if not lines or lines[0].strip() != "---":
-        return None, "missing YAML frontmatter delimited by ---"
+        return None, [], "missing YAML frontmatter delimited by ---"
 
     end = None
     for i, line in enumerate(lines[1:], start=1):
@@ -146,27 +168,29 @@ def parse_frontmatter(lines):
             end = i
             break
     if end is None:
-        return None, "unterminated YAML frontmatter (no closing ---)"
+        return None, [], "unterminated YAML frontmatter (no closing ---)"
 
-    block = "\n".join(lines[1:end])
+    text = block = "\n".join(lines[1:end])
     try:
-        data = yaml.safe_load(block)
+        data = yaml.safe_load(text)
     except yaml.YAMLError as err:
         # Retry allowing the plain-scalar leniency the loaders have.
+        text = _quote_colon_bearing_scalars(block)
         try:
-            data = yaml.safe_load(_quote_colon_bearing_scalars(block))
+            data = yaml.safe_load(text)
         except yaml.YAMLError as retry_err:
             # Report the retry's error, not the first one. The first error is
             # often the tolerated colon scalar, which points the reader at a
             # line that is actually fine; the retry's error is the one left.
             detail = " ".join(str(retry_err).split())
-            return None, f"frontmatter is not valid YAML: {detail}"
+            return None, [], f"frontmatter is not valid YAML: {detail}"
 
     if data is None:
-        return None, "frontmatter block is empty"
+        return None, [], "frontmatter block is empty"
     if not isinstance(data, dict):
-        return None, f"frontmatter must be a YAML mapping, got {type(data).__name__}"
-    return data, None
+        return None, [], f"frontmatter must be a YAML mapping, got {type(data).__name__}"
+    # Compose the same text that parsed, so the keys match the data.
+    return data, _literal_top_level_keys(text), None
 
 
 def check(path):
@@ -179,14 +203,32 @@ def check(path):
     except UnicodeDecodeError as err:
         return [f"not valid UTF-8: {err}"]
 
-    data, err = parse_frontmatter(lines)
+    data, literal_keys, err = parse_frontmatter(lines)
     if err:
         return [err]
 
     problems = []
+    duplicates = sorted({k for k in literal_keys if literal_keys.count(k) > 1})
+    if duplicates:
+        listed = ", ".join(f"`{k}`" for k in duplicates)
+        problems.append(
+            f"duplicate key(s) {listed} — the loader rejects the file outright "
+            f"rather than keeping the last value"
+        )
+
     for field in REQUIRED:
-        if field not in data:
-            problems.append(f"missing field `{field}`")
+        if field not in literal_keys:
+            if field in data:
+                # Present after PyYAML expanded `<<: *anchor`, absent as far as
+                # the loader is concerned -- it does not merge, and drops the
+                # skill. Say which of the two it is; "missing" alone would send
+                # someone looking for a key they can plainly see.
+                problems.append(
+                    f"field `{field}` is only supplied through a YAML merge key, "
+                    f"which the loader does not expand"
+                )
+            else:
+                problems.append(f"missing field `{field}`")
             continue
         value = data[field]
         if value is None:
