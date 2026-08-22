@@ -36,6 +36,8 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     accepted   a plain key containing `#`, `foo#bar: Text: details`
     accepted   a quoted key containing one, `"some # key": Text: details`
     accepted   a root mapping indented as a whole
+    accepted   a stray trailing quote on a required key, `description": ...`
+    dropped    a stray leading quote on one, `"description: ...`
     dropped    a plain key containing a colon, `foo:bar:` / `http://x:`
     dropped    an indented root whose unread key carries a bad flow value
     dropped    description: "unterminated                (a quote really parses)
@@ -220,6 +222,18 @@ def _quote_colon_bearing_scalars(block):
                 out.append(line)
                 continue
 
+            # `.strip()` rather than "unquote only a matched pair" on purpose,
+            # and it is the loader that decides which is right here. A stray
+            # edge quote on a required key is tolerated by it:
+            #
+            #     description": [thing: Text: details]   ACCEPTED
+            #     "description: [thing: Text: details]   DROPPED
+            #
+            # Treating `description"` as the required field is what matches the
+            # first line. Requiring a matched pair would classify it as an
+            # unread key, exclude the flow value, and fail a file that loads.
+            # The second line fails anyway: an opening quote with no closing
+            # one is a scanner error the retry never reaches.
             excluded = ALWAYS_EXCLUDED
             if indent == root_indent and key.strip("\"'") not in REQUIRED:
                 excluded += UNREAD_KEY_EXCLUDED
