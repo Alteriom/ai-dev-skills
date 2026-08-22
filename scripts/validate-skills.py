@@ -23,6 +23,10 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     dropped    description: foo:          (colon with no space after it)
     accepted   an indented, nested `short-description: Text: details`
     accepted   the same scalar under a sequence marker, `- thing: Text: details`
+    accepted   a quoted key, `"description": Text: details`
+    accepted   a non-ASCII key, `méta: Text: details`
+    accepted   description: - item: detail   (read as the string "- item: detail")
+    accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
                loader rejects the file)
     dropped    `name`/`description` supplied only via `<<: *defaults`
@@ -67,11 +71,24 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 # so a top-level-only rewrite would leave the retry failing on a file that loads.
 # The `-` alternative covers a mapping entry under a sequence marker
 # (`  - thing: Text: details`), which the loaders also accept.
-KEY_VALUE = re.compile(r"^([ \t]*(?:-[ \t]+)*)([A-Za-z0-9_.-]+):[ \t]+(\S.*)$")
+#
+# The key is matched as a quoted scalar or an unspaced run rather than as
+# `[A-Za-z0-9_.-]+`: `"description": Text: details` and `méta: Text: details`
+# both load, and an ASCII-only key pattern refused to rewrite either. Spaces
+# stay excluded from unquoted keys on purpose -- a continuation line of a
+# multi-line plain scalar looks exactly like `some words: value`, and rewriting
+# one would corrupt the scalar it belongs to.
+KEY_VALUE = re.compile(
+    r"^([ \t]*(?:-[ \t]+)*)"          # indent, and any sequence markers
+    r"(\"[^\"]*\"|'[^']*'|[^\s:#]+)"  # key: quoted, or unspaced and colon-free
+    r":[ \t]+(\S.*)$"                 # the value, on this line
+)
 
 # `key: |` / `key: >` opens a block scalar; every more-indented line below it is
 # literal text, not a mapping, and must never be rewritten.
-BLOCK_SCALAR = re.compile(r"^([ \t]*(?:-[ \t]+)*)[A-Za-z0-9_.-]+:[ \t]*[|>]")
+BLOCK_SCALAR = re.compile(
+    r"^([ \t]*(?:-[ \t]+)*)(?:\"[^\"]*\"|'[^']*'|[^\s:#]+):[ \t]*[|>]"
+)
 
 # "#" only opens a comment when it follows whitespace -- `foo#bar` is one scalar.
 INLINE_COMMENT = re.compile(r"(?:^|\s)#")
