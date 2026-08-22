@@ -25,6 +25,11 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     accepted   the same scalar under a sequence marker, `- thing: Text: details`
     accepted   a quoted key, `"description": Text: details`
     accepted   a non-ASCII key, `méta: Text: details`
+    accepted   a spaced key, `some key: Text: details`
+    accepted   space before the separator, `description : Text: details`
+    dropped    a repeated key, required or not (`metadata:` twice)
+    dropped    a colon scalar inside a flow collection, `[thing: Text: details]`
+    dropped    a plain scalar continued onto a more-indented line with a colon
     accepted   description: - item: detail   (read as the string "- item: detail")
     accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
@@ -72,22 +77,28 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 # The `-` alternative covers a mapping entry under a sequence marker
 # (`  - thing: Text: details`), which the loaders also accept.
 #
-# The key is matched as a quoted scalar or an unspaced run rather than as
-# `[A-Za-z0-9_.-]+`: `"description": Text: details` and `méta: Text: details`
-# both load, and an ASCII-only key pattern refused to rewrite either. Spaces
-# stay excluded from unquoted keys on purpose -- a continuation line of a
-# multi-line plain scalar looks exactly like `some words: value`, and rewriting
-# one would corrupt the scalar it belongs to.
+# The key is matched loosely -- quoted, non-ASCII, containing spaces, and with
+# whitespace before the separator -- because `"description": Text: details`,
+# `méta: Text: details`, `some key: Text: details` and `description : Text:
+# details` all load, and a tight `[A-Za-z0-9_.-]+` pattern refused to rewrite
+# any of them.
+#
+# A loose key pattern makes a continuation line of a multi-line plain scalar
+# (`  that continues here: yes`) look exactly like a mapping entry. That is
+# handled structurally instead, by indent: see the skip in
+# `_quote_colon_bearing_scalars`. Excluding spaced keys to dodge it would trade
+# one false positive for another.
 KEY_VALUE = re.compile(
     r"^([ \t]*(?:-[ \t]+)*)"          # indent, and any sequence markers
-    r"(\"[^\"]*\"|'[^']*'|[^\s:#]+)"  # key: quoted, or unspaced and colon-free
-    r":[ \t]+(\S.*)$"                 # the value, on this line
+    r"(\"[^\"]*\"|'[^']*'|[^\s:#][^:#]*?)"  # key: quoted, or plain
+    r"[ \t]*:[ \t]+(\S.*)$"          # optional space, separator, value
 )
 
 # `key: |` / `key: >` opens a block scalar; every more-indented line below it is
 # literal text, not a mapping, and must never be rewritten.
 BLOCK_SCALAR = re.compile(
-    r"^([ \t]*(?:-[ \t]+)*)(?:\"[^\"]*\"|'[^']*'|[^\s:#]+):[ \t]*[|>]"
+    r"^([ \t]*(?:-[ \t]+)*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s:#][^:#]*?)[ \t]*:[ \t]*[|>]"
 )
 
 # "#" only opens a comment when it follows whitespace -- `foo#bar` is one scalar.
@@ -122,26 +133,33 @@ def _strip_inline_comment(value):
 def _quote_colon_bearing_scalars(block):
     """Return the block with colon-bearing plain scalar values quoted."""
     out = []
-    block_scalar_indent = None
+    # Lines indented deeper than this belong to a scalar started above -- a
+    # block scalar body, or the continuation of a multi-line plain scalar.
+    # Either way they are content, not mapping entries, and rewriting one would
+    # corrupt the value it is part of.
+    skip_deeper_than = None
 
     for line in block.splitlines():
-        if block_scalar_indent is not None:
+        if skip_deeper_than is not None:
             indent = len(line) - len(line.lstrip())
-            if line.strip() and indent <= block_scalar_indent:
-                block_scalar_indent = None
+            if line.strip() and indent <= skip_deeper_than:
+                skip_deeper_than = None
             else:
                 out.append(line)
                 continue
 
         opener = BLOCK_SCALAR.match(line)
         if opener:
-            block_scalar_indent = len(opener.group(1))
+            skip_deeper_than = len(opener.group(1))
             out.append(line)
             continue
 
         match = KEY_VALUE.match(line)
         if match:
             indent, key, raw = match.group(1), match.group(2), match.group(3).rstrip()
+            # This key carries a value on its own line, so anything more
+            # indented below is that value continuing.
+            skip_deeper_than = len(indent)
             # Compare and quote the decoded value, not the raw line: an inline
             # comment is not part of the value, and treating it as part of one
             # would let `description: 123 # TODO: details` masquerade as a string.
