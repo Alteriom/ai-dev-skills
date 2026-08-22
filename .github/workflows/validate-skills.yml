@@ -4,10 +4,12 @@ name: Validate skills
 # loader at session start. The runner logs it; the agent never sees it, so the
 # skill just silently stops existing (alteriom-dev-ops#2201). This job is the
 # only place that failure is visible before it reaches production.
+#
+# No branch filter on push: the guard should run wherever a SKILL.md lands, and
+# a filter naming one branch silently stops guarding after a branch rename.
 on:
   pull_request:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # The validator parses frontmatter with a real YAML parser rather than
+      # splitting lines, so PyYAML is a hard requirement -- it exits 2 rather
+      # than reporting a pass it could not actually verify.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
 
       - name: Validate every SKILL.md
         run: python3 scripts/validate-skills.py
