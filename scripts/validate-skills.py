@@ -56,7 +56,10 @@ Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
     accepted   metadata: / `  thing: - item: detail`   (nested, so fine)
     accepted   description: ? item: detail   (likewise)
     dropped    a repeated `description:` key (PyYAML keeps the last; the
-               loader rejects the file)
+               loader rejects the file) -- but only for fields it knows;
+               a repeated unknown key is accepted
+    dropped    metadata: anything that is not a mapping
+    accepted   any value shape at all under a genuinely unknown key
     dropped    `name`/`description` supplied only via `<<: *defaults`
     accepted   description: 123 # TODO: x  -- decodes to the number 123
 
@@ -143,30 +146,52 @@ INLINE_COMMENT = re.compile(r"(?:^|\s)#")
 # field decodes to null and is dropped too.
 ALWAYS_EXCLUDED = ("\"", "'", "#")
 
-# Excluded only on TOP-LEVEL keys the loader does not read. On `name`/
-# `description` it takes the raw line as text, so `[DEPRECATED] Use when: x`,
-# `[thing: Text: details]` and `&summary Text: details` all load and must be
-# rewritten. The same values directly on a top-level unknown key drop the whole
-# file. Nested deeper, they are fine again -- `metadata:` / `  thing: [thing:
-# Text: details]` loads. Measured, not assumed: what discriminates is the key
-# and its depth, never the shape of the value.
-UNREAD_KEY_EXCLUDED = (
-    "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`",
-    # `-`, `?` and `:` belong here too. Measured on an unread top-level key,
-    # every one of these is dropped:
-    #     metadata: - item: detail
-    #     metadata: ? item: detail
-    #     metadata: : item: detail
-    #     metadata: -ish thing: detail     <- not even a structural form
-    # The last one is why this is a plain prefix test and not `^[-?:](\s|$)`:
-    # the loader drops a leading `-` whether or not a space follows it. On
-    # `description` the same values load, and nested under an unread key they
-    # load again, so both of those paths still reach the rewrite.
-    "-", "?", ":",
-    # `,` is a flow-entry indicator and behaves the same way:
-    #     metadata: ,item Text: detail    DROPPED
-    ",",
+# Value prefixes that make PyYAML refuse a line the loader still accepts. These
+# are what the retry quotes; the loader treats them as ordinary text.
+#
+# This list used to be applied only to "unread" top-level keys, on the strength
+# of `metadata: [thing: Text: details]` being dropped. That generalisation was
+# wrong. `metadata` is not an unread key -- it is a typed schema field, and the
+# loader drops the file when it is not a mapping, whatever the value looks like
+# (`metadata: plainstring` is dropped too). A genuinely unknown key is ignored
+# outright, and every one of these shapes loads under one:
+#
+#     zzunknown: [thing: Text: details]    ACCEPTED
+#     zzunknown: - item: detail            ACCEPTED
+#     zzunknown: ,item Text: detail        ACCEPTED
+#     zzunknown: ax thing: detail          ACCEPTED
+#
+# So there is no key-dependent exclusion here any more. Typed fields are
+# checked by type instead, which is what actually decides it -- see
+# TYPED_FIELDS.
+STRUCTURAL_INDICATORS = (
+    "[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`", "-", "?", ":", ",",
 )
+
+# Fields the loader deserializes into a specific shape. A wrong type here drops
+# the whole file, and this is the real rule behind every `metadata:` case that
+# looked like "unread keys reject indicators":
+#
+#     metadata: plainstring                DROPPED
+#     metadata: [thing: Text: details]     DROPPED
+#     metadata: - item: detail             DROPPED
+#     metadata:\n  a: b                    ACCEPTED
+#
+# Deliberately short. Only fields measured against the loader belong here --
+# guessing at the schema is how the previous rule went wrong.
+TYPED_FIELDS = {"metadata": dict}
+
+# Duplicate keys are rejected by the loader, but only for fields it knows. A
+# repeated unknown key is ignored along with the key itself:
+#
+#     description: twice          DROPPED
+#     metadata: twice (mappings)  DROPPED
+#     zzunknown: twice            ACCEPTED
+#
+# The earlier blanket rule came from probing a duplicated `metadata:` whose
+# value was also the wrong type -- a sufficient cause on its own, which masked
+# the real scope.
+KNOWN_FIELDS = frozenset(REQUIRED) | frozenset(TYPED_FIELDS)
 
 # A colon inside a plain scalar is the single construct the loaders tolerate and
 # PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
@@ -185,25 +210,8 @@ def _strip_inline_comment(value):
     return value[: match.start()].rstrip() if match else value
 
 
-def _root_indent(block):
-    """Indentation of the root mapping, which is not always column zero.
-
-    YAML lets the whole root mapping sit at a consistent indent. Equating
-    "top level" with column zero would then classify every entry as nested,
-    and a `metadata: [thing: Text: details]` the loader drops would be rewritten
-    into a pass.
-    """
-    for line in block.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        return line[: len(line) - len(line.lstrip())]
-    return ""
-
-
 def _quote_colon_bearing_scalars(block):
     """Return the block with colon-bearing plain scalar values quoted."""
-    root_indent = _root_indent(block)
     out = []
     # Lines indented deeper than this belong to a scalar started above -- a
     # block scalar body, or the continuation of a multi-line plain scalar.
@@ -245,22 +253,6 @@ def _quote_colon_bearing_scalars(block):
                 out.append(line)
                 continue
 
-            # `.strip()` rather than "unquote only a matched pair" on purpose,
-            # and it is the loader that decides which is right here. A stray
-            # edge quote on a required key is tolerated by it:
-            #
-            #     description": [thing: Text: details]   ACCEPTED
-            #     "description: [thing: Text: details]   DROPPED
-            #
-            # Treating `description"` as the required field is what matches the
-            # first line. Requiring a matched pair would classify it as an
-            # unread key, exclude the flow value, and fail a file that loads.
-            # The second line fails anyway: an opening quote with no closing
-            # one is a scanner error the retry never reaches.
-            excluded = ALWAYS_EXCLUDED
-            if indent == root_indent and key.strip("\"'") not in REQUIRED:
-                excluded += UNREAD_KEY_EXCLUDED
-
             value = _strip_inline_comment(raw)
             # A colon is the usual reason a line needs quoting, but not the
             # only one. On a required key an indicator-leading value is legal
@@ -272,14 +264,12 @@ def _quote_colon_bearing_scalars(block):
             #
             # decodes to "[DEPRECATED" -- the loader strips the comment too,
             # and loads. Testing only for a colon left that line unrewritten
-            # and failed a skill that loads. On unread keys these indicators
-            # are in `excluded` already, so this clause only widens required
-            # ones.
+            # and failed a skill that loads.
             needs_rewrite = bool(COLON_IN_VALUE.search(value)) or value.startswith(
-                UNREAD_KEY_EXCLUDED
+                STRUCTURAL_INDICATORS
             )
             if (
-                not raw.startswith(excluded)
+                not raw.startswith(ALWAYS_EXCLUDED)
                 and value
                 and needs_rewrite
             ):
@@ -357,13 +347,27 @@ def check(path):
         return [err]
 
     problems = []
-    duplicates = sorted({k for k in literal_keys if literal_keys.count(k) > 1})
+    duplicates = sorted(
+        {
+            k
+            for k in literal_keys
+            if k in KNOWN_FIELDS and literal_keys.count(k) > 1
+        }
+    )
     if duplicates:
         listed = ", ".join(f"`{k}`" for k in duplicates)
         problems.append(
             f"duplicate key(s) {listed} — the loader rejects the file outright "
             f"rather than keeping the last value"
         )
+
+    for field, expected in TYPED_FIELDS.items():
+        if field in data and not isinstance(data[field], expected):
+            got = type(data[field]).__name__
+            problems.append(
+                f"field `{field}` must be a {expected.__name__}, got {got} — "
+                f"the loader drops the whole file on a wrong type here"
+            )
 
     for field in REQUIRED:
         if field not in literal_keys:
