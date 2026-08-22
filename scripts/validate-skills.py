@@ -1,32 +1,262 @@
 #!/usr/bin/env python3
 """Validate every SKILL.md against the agent skill-loader contract.
 
-Both Claude Code and Codex refuse to load a skill whose SKILL.md lacks a
-`---`-delimited YAML frontmatter block carrying a non-empty `name` and
-`description`. The refusal is logged on the runner and is invisible from
-inside the agent session, so a malformed skill silently disappears from the
-library instead of failing loudly (Alteriom/alteriom-dev-ops#2201).
+Both Claude Code and Codex parse SKILL.md frontmatter as YAML and refuse to
+load any skill whose frontmatter is missing, unparseable, or lacking a
+non-empty `name` and `description`. The refusal is logged on the runner and is
+invisible from inside the agent session, so a malformed skill silently
+disappears from the library instead of failing loudly
+(Alteriom/alteriom-dev-ops#2201).
 
 This script is that missing loud failure. Exit 0 = every SKILL.md loads.
 
+Why not "just run yaml.safe_load and fail on any error": the loaders are more
+lenient than PyYAML about one construct, and matching PyYAML exactly would fail
+skills that demonstrably load. Behaviour below was measured against the real
+Codex loader (`codex debug prompt-input`, codex-cli 0.148.0), not assumed:
+
+    accepted   description: Plain text. NOTE: with a colon-space in it
+    accepted   description: >- (folded), 'single quoted', "double quoted"
+    dropped    description: null            (and `description: # comment`)
+    dropped    metadata: [unterminated      (structural YAML error)
+    dropped    no description key at all
+    dropped    description: foo:          (colon with no space after it)
+    accepted   an indented, nested `short-description: Text: details`
+    accepted   the same scalar under a sequence marker, `- thing: Text: details`
+    accepted   a quoted key, `"description": Text: details`
+    accepted   a non-ASCII key, `méta: Text: details`
+    accepted   a spaced key, `some key: Text: details`
+    accepted   space before the separator, `description : Text: details`
+    dropped    a repeated key, required or not (`metadata:` twice)
+    dropped    a colon scalar inside a flow collection, `[thing: Text: details]`
+    dropped    a plain scalar continued onto a more-indented line with a colon
+    accepted   description: [DEPRECATED] Use when: x   (read as literal text)
+    accepted   description: [thing: Text: details]      (likewise)
+    accepted   description: &summary Text: details      (anchor NOT resolved)
+    accepted   a plain key containing `#`, `foo#bar: Text: details`
+    accepted   a quoted key containing one, `"some # key": Text: details`
+    accepted   a root mapping indented as a whole
+    dropped    a plain key containing a colon, `foo:bar:` / `http://x:`
+    dropped    an indented root whose unread key carries a bad flow value
+    dropped    description: "unterminated                (a quote really parses)
+    accepted   metadata: / `  thing: [thing: Text: details]`  (nested, so fine)
+    accepted   description: {thing: details}             (rendered verbatim)
+    dropped    description: [alpha, beta]                (a flow SEQUENCE is not)
+    dropped    metadata: [thing: Text: details]          (same value, unread key)
+    dropped    metadata: &summary Text: details          (likewise)
+    accepted   description: - item: detail   (read as the string "- item: detail")
+    accepted   description: ? item: detail   (likewise)
+    dropped    a repeated `description:` key (PyYAML keeps the last; the
+               loader rejects the file)
+    dropped    `name`/`description` supplied only via `<<: *defaults`
+    accepted   description: 123 # TODO: x  -- decodes to the number 123
+
+Required fields must decode to a non-empty string, and that is the one place
+this script is deliberately stricter than the loader. `description: 123` and
+`description: {thing: details}` both load, rendered verbatim; `description:
+[alpha, beta]` and `description: null` are dropped. Rather than encode that
+split -- which is arbitrary, undocumented by the loader, and free to change
+between builds -- all four are reported. A required field that is not a string
+is an authoring mistake whichever way the loader happens to treat it. Every
+other rule here fails only what the loader actually drops.
+
+A plain scalar containing ": " is invalid per the YAML spec and PyYAML rejects
+it, but the loaders accept it -- two skills in production rely on that today
+(centris-extractor, prd-writer). So a strict parse failure is retried with
+plain scalar values quoted; if it then parses, the file is one the loaders
+accept. Only colon-bearing plain scalars are rewritten, and never one opening a
+quote or a flow collection -- so a genuine structural error such as
+`[unterminated` still fails, and a required field PyYAML typed as null or a
+number keeps that type instead of being laundered into a passing string.
+
 Deliberately NOT checked: `name` matching the directory name. The loaders key
-skills off the directory, and many skills here carry a human-readable `name`
+skills off the directory, and many skills carry a human-readable `name`
 ("Next.js" in nextjs/) that loads fine.
 
 Usage: scripts/validate-skills.py [root ...]   (default: repo root)
 """
 
+import json
 import os
+import re
 import sys
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 REQUIRED = ("name", "description")
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 
+# A `key: value` line whose value is on the same line, at any indent. Nested
+# values matter: the loaders accept an indented `short-description: Text: details`,
+# so a top-level-only rewrite would leave the retry failing on a file that loads.
+# The `-` alternative covers a mapping entry under a sequence marker
+# (`  - thing: Text: details`), which the loaders also accept.
+#
+# The key is matched loosely -- quoted, non-ASCII, containing spaces, and with
+# whitespace before the separator -- because `"description": Text: details`,
+# `méta: Text: details`, `some key: Text: details` and `description : Text:
+# details` all load, and a tight `[A-Za-z0-9_.-]+` pattern refused to rewrite
+# any of them.
+#
+# A loose key pattern makes a continuation line of a multi-line plain scalar
+# (`  that continues here: yes`) look exactly like a mapping entry. That is
+# handled structurally instead, by indent: see the skip in
+# `_quote_colon_bearing_scalars`. Excluding spaced keys to dodge it would trade
+# one false positive for another.
+KEY_VALUE = re.compile(
+    r"^([ \t]*(?:-[ \t]+)*)"          # indent, and any sequence markers
+    r"(\"[^\"]*\"|'[^']*'|[^\s:#][^:]*?)"  # key: quoted, or plain
+    r"[ \t]*:[ \t]+(\S.*)$"          # optional space, separator, value
+)
 
-def frontmatter_keys(lines):
-    """Return (keys, error). keys maps top-level frontmatter key -> value."""
+# `key: |` / `key: >` opens a block scalar; every more-indented line below it is
+# literal text, not a mapping, and must never be rewritten.
+BLOCK_SCALAR = re.compile(
+    r"^([ \t]*(?:-[ \t]+)*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s:#][^:#]*?)[ \t]*:[ \t]*[|>]"
+)
+
+# "#" only opens a comment when it follows whitespace -- `foo#bar` is one scalar.
+INLINE_COMMENT = re.compile(r"(?:^|\s)#")
+
+# Values opening a quote, flow collection, block scalar, anchor, alias or tag
+# are real YAML syntax. Re-quoting those would paper over a structural error the
+# loaders reject, so they are left exactly as written.
+# "#" is in this list because a value starting with it is a YAML comment, so the
+# field decodes to null. Its comment text can itself contain a colon
+# (`description: # TODO: fill in`), which would otherwise satisfy the rewrite
+# predicate below and launder a null field into a passing string.
+# Excluded on every key. A quote opens a scalar the loader really does parse --
+# `description: "unterminated` is dropped -- and `#` opens a comment, so the
+# field decodes to null and is dropped too.
+ALWAYS_EXCLUDED = ("\"", "'", "#")
+
+# Excluded only on TOP-LEVEL keys the loader does not read. On `name`/
+# `description` it takes the raw line as text, so `[DEPRECATED] Use when: x`,
+# `[thing: Text: details]` and `&summary Text: details` all load and must be
+# rewritten. The same values directly on a top-level unknown key drop the whole
+# file. Nested deeper, they are fine again -- `metadata:` / `  thing: [thing:
+# Text: details]` loads. Measured, not assumed: what discriminates is the key
+# and its depth, never the shape of the value.
+UNREAD_KEY_EXCLUDED = ("[", "]", "{", "}", "|", ">", "&", "*", "!", "%", "@", "`")
+
+# A colon inside a plain scalar is the single construct the loaders tolerate and
+# PyYAML does not, so it is the only thing the retry rewrites. Quoting any other
+# value would destroy the type PyYAML correctly assigned it, and `description:
+# null` would come back as the string "null" and wrongly pass.
+# Colon *followed by whitespace* -- that is the construct the loaders tolerate.
+# A value merely ending in a colon (`description: foo:`) is not it: the loader
+# drops that skill, so it must stay a parse failure rather than be quoted into a
+# passing string.
+COLON_IN_VALUE = re.compile(r":\s")
+
+
+def _strip_inline_comment(value):
+    """Return the value as the loader decodes it, without any trailing comment."""
+    match = INLINE_COMMENT.search(value)
+    return value[: match.start()].rstrip() if match else value
+
+
+def _root_indent(block):
+    """Indentation of the root mapping, which is not always column zero.
+
+    YAML lets the whole root mapping sit at a consistent indent. Equating
+    "top level" with column zero would then classify every entry as nested,
+    and a `metadata: [thing: Text: details]` the loader drops would be rewritten
+    into a pass.
+    """
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        return line[: len(line) - len(line.lstrip())]
+    return ""
+
+
+def _quote_colon_bearing_scalars(block):
+    """Return the block with colon-bearing plain scalar values quoted."""
+    root_indent = _root_indent(block)
+    out = []
+    # Lines indented deeper than this belong to a scalar started above -- a
+    # block scalar body, or the continuation of a multi-line plain scalar.
+    # Either way they are content, not mapping entries, and rewriting one would
+    # corrupt the value it is part of.
+    skip_deeper_than = None
+
+    for line in block.splitlines():
+        if skip_deeper_than is not None:
+            indent = len(line) - len(line.lstrip())
+            if line.strip() and indent <= skip_deeper_than:
+                skip_deeper_than = None
+            else:
+                out.append(line)
+                continue
+
+        opener = BLOCK_SCALAR.match(line)
+        if opener:
+            skip_deeper_than = len(opener.group(1))
+            out.append(line)
+            continue
+
+        match = KEY_VALUE.match(line)
+        if match:
+            indent, key, raw = match.group(1), match.group(2), match.group(3).rstrip()
+            # This key carries a value on its own line, so anything more
+            # indented below is that value continuing.
+            skip_deeper_than = len(indent)
+            # Compare and quote the decoded value, not the raw line: an inline
+            # comment is not part of the value, and treating it as part of one
+            # would let `description: 123 # TODO: details` masquerade as a string.
+            # `#` is only a comment after whitespace, so `foo#bar` is a real
+            # key -- but `some key # note` is not one, it is a key plus a
+            # comment, and rewriting the line would swallow the comment.
+            # Inside quotes none of that applies: `"some # key"` is ordinary
+            # key text, and the loader accepts it.
+            quoted_key = key.startswith(('"', "'"))
+            if not quoted_key and INLINE_COMMENT.search(key):
+                out.append(line)
+                continue
+
+            excluded = ALWAYS_EXCLUDED
+            if indent == root_indent and key.strip("\"'") not in REQUIRED:
+                excluded += UNREAD_KEY_EXCLUDED
+
+            value = _strip_inline_comment(raw)
+            if (
+                not raw.startswith(excluded)
+                and value
+                and COLON_IN_VALUE.search(value)
+            ):
+                out.append(f"{indent}{key}: {json.dumps(value)}")
+                continue
+
+        out.append(line)
+    return "\n".join(out)
+
+
+def _literal_top_level_keys(text):
+    """Keys written directly in the mapping, before merge-key expansion.
+
+    `yaml.safe_load` hides two things the loader cares about. It resolves
+    `<<: *defaults`, so a skill whose `name` exists only in an anchor looks
+    complete when the loader will not advertise it; and it silently keeps the
+    last of a repeated key, so a botched merge conflict that leaves two
+    `description:` lines reads as valid when the loader rejects the file. The
+    node tree still has both, so read the keys from there.
+    """
+    node = yaml.compose(text)
+    if not isinstance(node, yaml.MappingNode):
+        return []
+    return [k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode)]
+
+
+def parse_frontmatter(lines):
+    """Return (mapping, literal_keys, error). `error` is None on success."""
     if not lines or lines[0].strip() != "---":
-        return None, "missing YAML frontmatter delimited by ---"
+        return None, [], "missing YAML frontmatter delimited by ---"
 
     end = None
     for i, line in enumerate(lines[1:], start=1):
@@ -34,19 +264,29 @@ def frontmatter_keys(lines):
             end = i
             break
     if end is None:
-        return None, "unterminated YAML frontmatter (no closing ---)"
+        return None, [], "unterminated YAML frontmatter (no closing ---)"
 
-    keys = {}
-    for line in lines[1:end]:
-        # Only top-level scalars; indented lines and list items belong to a
-        # parent key, and a bare `#` line is a comment.
-        if not line.strip() or line.startswith((" ", "\t", "-", "#")):
-            continue
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        keys[key.strip()] = value.strip()
-    return keys, None
+    text = block = "\n".join(lines[1:end])
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as err:
+        # Retry allowing the plain-scalar leniency the loaders have.
+        text = _quote_colon_bearing_scalars(block)
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as retry_err:
+            # Report the retry's error, not the first one. The first error is
+            # often the tolerated colon scalar, which points the reader at a
+            # line that is actually fine; the retry's error is the one left.
+            detail = " ".join(str(retry_err).split())
+            return None, [], f"frontmatter is not valid YAML: {detail}"
+
+    if data is None:
+        return None, [], "frontmatter block is empty"
+    if not isinstance(data, dict):
+        return None, [], f"frontmatter must be a YAML mapping, got {type(data).__name__}"
+    # Compose the same text that parsed, so the keys match the data.
+    return data, _literal_top_level_keys(text), None
 
 
 def check(path):
@@ -59,16 +299,42 @@ def check(path):
     except UnicodeDecodeError as err:
         return [f"not valid UTF-8: {err}"]
 
-    keys, err = frontmatter_keys(lines)
+    data, literal_keys, err = parse_frontmatter(lines)
     if err:
         return [err]
 
     problems = []
+    duplicates = sorted({k for k in literal_keys if literal_keys.count(k) > 1})
+    if duplicates:
+        listed = ", ".join(f"`{k}`" for k in duplicates)
+        problems.append(
+            f"duplicate key(s) {listed} — the loader rejects the file outright "
+            f"rather than keeping the last value"
+        )
+
     for field in REQUIRED:
-        if field not in keys:
-            problems.append(f"missing field `{field}`")
-        elif not keys[field].strip().strip("\"'"):
-            problems.append(f"empty field `{field}`")
+        if field not in literal_keys:
+            if field in data:
+                # Present after PyYAML expanded `<<: *anchor`, absent as far as
+                # the loader is concerned -- it does not merge, and drops the
+                # skill. Say which of the two it is; "missing" alone would send
+                # someone looking for a key they can plainly see.
+                problems.append(
+                    f"field `{field}` is only supplied through a YAML merge key, "
+                    f"which the loader does not expand"
+                )
+            else:
+                problems.append(f"missing field `{field}`")
+            continue
+        value = data[field]
+        if value is None:
+            problems.append(f"field `{field}` is null")
+        elif not isinstance(value, str):
+            problems.append(
+                f"field `{field}` must be a string, got {type(value).__name__}"
+            )
+        elif not value.strip():
+            problems.append(f"field `{field}` is empty")
     return problems
 
 
@@ -80,6 +346,17 @@ def find_skill_files(root):
 
 
 def main(argv):
+    # Fail closed. Without a YAML parser this could only do a weaker check, and
+    # reporting "0 invalid" from a degraded run is the exact silent pass this
+    # guard exists to prevent.
+    if yaml is None:
+        print(
+            "ERROR: PyYAML is required to validate skill frontmatter "
+            "(pip install pyyaml)",
+            file=sys.stderr,
+        )
+        return 2
+
     roots = argv[1:] or [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
 
     found = []
