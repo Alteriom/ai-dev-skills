@@ -1,5 +1,5 @@
 ---
-name: tRPC  
+name: trpc-best-practices
 slug: trpc-best-practices
 version: 1.0.0
 description: Build end-to-end typesafe APIs with tRPC, Zod validation, and Next.js integration for full-stack TypeScript applications

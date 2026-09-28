@@ -1,5 +1,5 @@
 ---
-name: Nginx
+name: nginx
 slug: nginx
 version: 1.0.0
 description: Configure Nginx for reverse proxy, load balancing, SSL/TLS termination, caching, and high-performance static file serving

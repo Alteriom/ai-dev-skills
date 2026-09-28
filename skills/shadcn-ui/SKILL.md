@@ -1,5 +1,5 @@
 ---
-name: shadcn/ui
+name: shadcn-ui
 slug: shadcn-ui  
 version: 1.0.0
 description: Build production UIs with shadcn/ui components, Tailwind CSS, and Radix UI primitives for accessible React design systems

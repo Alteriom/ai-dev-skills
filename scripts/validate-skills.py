@@ -69,9 +69,14 @@ quote or a flow collection -- so a genuine structural error such as
 `[unterminated` still fails, and a required field PyYAML typed as null or a
 number keeps that type instead of being laundered into a passing string.
 
-Deliberately NOT checked: `name` matching the directory name. The loaders key
-skills off the directory, and many skills carry a human-readable `name`
-("Next.js" in nextjs/) that loads fine.
+`name` must equal the skill's directory name and use only lowercase letters,
+digits and single hyphens (at most 64 characters). Codex keys skills off the
+directory and loads a display name such as "Next.js" regardless, so this is not
+a loader rule there -- it was deliberately left unchecked for that reason. It is
+the Agent Skills format and Claude Code's rule for `name`, though, and a free-
+form value let two different skills (redis/ and redis-store/) both advertise
+themselves as "Redis". One identifier per skill, the same everywhere: the
+folder, the frontmatter, the Command Center registry and the runner's link.
 
 Usage: scripts/validate-skills.py [root ...]   (default: repo root)
 """
@@ -87,6 +92,11 @@ except ImportError:
     yaml = None
 
 REQUIRED = ("name", "description")
+
+# The Agent Skills `name` grammar: lowercase alphanumerics in hyphen-separated
+# runs, no leading, trailing or doubled hyphen.
+SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_NAME_MAX = 64
 SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__"}
 
 # A `key: value` line whose value is on the same line, at any indent. Nested
@@ -335,6 +345,21 @@ def check(path):
             )
         elif not value.strip():
             problems.append(f"field `{field}` is empty")
+
+    name = data.get("name") if "name" in literal_keys else None
+    if isinstance(name, str) and name.strip():
+        directory = os.path.basename(os.path.dirname(os.path.abspath(path)))
+        if name != directory:
+            problems.append(
+                f"field `name` is {name!r} but the skill directory is "
+                f"{directory!r}; they must be identical"
+            )
+        elif not SKILL_NAME.match(name) or len(name) > SKILL_NAME_MAX:
+            problems.append(
+                f"field `name` {name!r} must be lowercase letters, digits and "
+                f"single hyphens, at most {SKILL_NAME_MAX} characters -- rename "
+                f"the directory as well"
+            )
     return problems
 
 

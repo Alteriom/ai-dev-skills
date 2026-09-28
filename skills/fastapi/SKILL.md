@@ -1,5 +1,5 @@
 ---
-name: FastAPI
+name: fastapi
 slug: fastapi
 version: 1.0.0
 description: Build production-ready Python APIs with FastAPI using type hints, async/await, dependency injection, and automatic OpenAPI documentation

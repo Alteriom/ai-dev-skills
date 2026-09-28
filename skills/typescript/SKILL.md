@@ -1,5 +1,5 @@
 ---
-name: TypeScript
+name: typescript
 slug: typescript
 version: 1.0.0
 description: Write type-safe TypeScript 5+ with proper narrowing, generics, utility types, and strict mode best practices for production applications

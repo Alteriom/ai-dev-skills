@@ -1,5 +1,5 @@
 ---
-name: React Expert
+name: react-expert
 slug: react-expert
 version: 1.0.0
 description: Build production-ready React 19+ applications with hooks, Server Components, performance optimization, and modern state management patterns

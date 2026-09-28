@@ -1,5 +1,5 @@
 ---
-name: Webhook
+name: webhook
 slug: webhook
 version: 1.0.0
 description: Build secure, reliable webhook systems for sending and receiving HTTP callbacks with signature verification, retry logic, and idempotency
