@@ -1,5 +1,5 @@
 ---
-name: Monitoring
+name: monitoring
 slug: monitoring
 version: 1.0.0
 description: Build production observability with metrics, logs, traces, and alerts using Prometheus, Grafana, Loki, and Sentry

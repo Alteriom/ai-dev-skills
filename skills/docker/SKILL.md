@@ -1,5 +1,5 @@
 ---
-name: Docker
+name: docker
 slug: docker
 version: 1.0.0
 description: Build secure, optimized Docker containers with multi-stage builds, networking, compose orchestration, and production deployment patterns

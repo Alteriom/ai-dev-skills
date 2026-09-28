@@ -1,5 +1,5 @@
 ---
-name: Next.js
+name: nextjs
 slug: nextjs
 version: 1.0.0
 description: Build Next.js 16+ applications with App Router, server components, caching strategies, and production deployment patterns

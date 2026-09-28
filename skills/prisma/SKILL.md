@@ -1,5 +1,5 @@
 ---
-name: Prisma
+name: prisma
 slug: prisma
 version: 1.0.0
 description: Master Prisma ORM for type-safe database queries, schema design, migrations, and performance optimization in TypeScript applications

@@ -1,5 +1,5 @@
 ---
-name: Redis
+name: redis-store
 slug: redis
 version: 1.0.0
 description: Master Redis for caching, session storage, rate limiting, pub/sub, and distributed data structures with proper expiration and persistence

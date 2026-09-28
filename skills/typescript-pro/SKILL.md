@@ -1,5 +1,5 @@
 ---
-name: TypeScript Pro
+name: typescript-pro
 slug: typescript-pro
 version: 1.0.0
 description: Master advanced TypeScript features including generics, conditional types, type guards, utility types, and full-stack type safety

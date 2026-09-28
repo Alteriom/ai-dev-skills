@@ -1,5 +1,5 @@
 ---
-name: Zod
+name: zod
 slug: zod
 version: 1.0.0
 description: TypeScript-first schema validation with static type inference. Build type-safe applications with runtime validation, form handling, and API contracts.

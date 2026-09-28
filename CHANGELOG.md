@@ -2,6 +2,18 @@
 
 All notable changes to AI Dev Skills will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `name` in 15 skills now equals the skill's directory: docker, fastapi,
+  monitoring, nextjs, nginx, prisma, react-expert, redis, redis-store,
+  shadcn-ui, trpc-best-practices, typescript, typescript-pro, webhook, zod.
+  They carried display names (`Next.js`, `shadcn/ui`, `React Expert`, `tRPC`
+  with trailing spaces), and `redis` and `redis-store` both claimed `Redis`.
+- `scripts/validate-skills.py` now fails a `name` that differs from its
+  directory or is not lowercase-hyphenated (at most 64 characters).
+
 ## [1.0.0] - 2026-04-14
 
 ### 🎉 Initial Release
